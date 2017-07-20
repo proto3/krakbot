@@ -1,56 +1,91 @@
 #!/usr/bin/env python3
-# To debug historic OHLC data inconcistencies, as discussed here:
-# https://www.reddit.com/r/kraken_traders/comments/6f6e9h/krakenapi_delivering_inconsistent_false_ohlc_data/
-
+import matplotlib.pyplot as plt
+from matplotlib.finance import candlestick2_ohlc
+import krakenex
 import decimal
 import time
-
-import krakenex
-
-pair = 'XETHZEUR'
-# NOTE: for the (default) 1-minute granularity, the API seems to provide
-# data up to 12 hours old only!
-since = str(1499000000) # UTC 2017-07-02 12:53:20
 
 k = krakenex.API()
 
 def now():
     return decimal.Decimal(time.time())
 
-def lineprint(msg, targetlen = 72):
-    line = '-'*5 + ' '
-    line += str(msg)
+def merge_hist(old_h, new_h):
+    if(not old_h):
+        old_h = new_h
+        return
 
-    l = len(line)
-    if l < targetlen:
-        trail = ' ' + '-'*(targetlen-l-1)
-        line += trail
+    old_it = len(old_h)-1
+    new_it = 0
 
-    print(line)
-    return
+    while(old_h[old_it][0] > new_h[new_it][0]):
+        old_it -= 1
 
+    if(old_h[old_it][0] < new_h[new_it][0]):
+        old_it += 1
+
+    while(new_it < len(new_h)):
+        if(old_it < len(old_h)):
+            if(old_h[old_it][0] == new_h[new_it][0]):
+                #replace
+                old_h[old_it] = new_h[new_it]
+            elif(old_h[old_it][0] > new_h[new_it][0]):
+                #insert
+                old_h.insert(old_it, new_h[new_it])
+            else:
+                new_it -= 1
+        else:
+            # append new_it
+            old_h.append(new_h[new_it])
+        old_it += 1
+        new_it += 1
+
+def request_ohlc(pair, since):
+    response = None
+    while(response == None):
+        try:
+            response = k.query_public('OHLC', req = {'pair': pair, 'since': since, 'interval': 15})
+        except:
+            print("Request failed, retry...")
+    return response
+
+def sar(ohlc_hist, sar_hist, i, acc_factor):
+    if(sar_hist[i-1] < float(ohlc_hist[i-1][2])):
+        return sar_hist[i-1] + acc_factor * (float(ohlc_hist[i][2]) - sar_hist[i-1])
+    else:
+        return sar_hist[i-1] + acc_factor * (float(ohlc_hist[i][3]) - sar_hist[i-1])
+
+pair = 'XETHZEUR'
+since = str(now() - 3600000)
+ohlc_hist = list()
 while True:
-    lineprint(now())
+    ohlc_req = request_ohlc(pair, since)
 
-    # comment out to reuse the same connection
-    #k.conn = krakenex.Connection()
+    since = ohlc_req['result']['last'] - 60
 
-    before = now()
-    ret = k.query_public('OHLC', req = {'pair': pair, 'since': since})
-    after = now()
+    if(not ohlc_hist):
+        ohlc_hist = ohlc_req['result'][pair]
+    else:
+        merge_hist(ohlc_hist, ohlc_req['result'][pair])
 
-    # comment out to reuse the same connection
-    #k.conn.close()
+    opens =  [row[1] for row in ohlc_hist]
+    highs =  [row[2] for row in ohlc_hist]
+    lows =   [row[3] for row in ohlc_hist]
+    closes = [row[4] for row in ohlc_hist]
+    vwap =   [row[5] for row in ohlc_hist]
 
-    # comment out to track the same "since"
-    #since = ret['result']['last']
+    sar_hist = [0.0]
+    for i in range(1, len(ohlc_hist)):
+        sar_hist.append(sar(ohlc_hist, sar_hist, i, 0.02))
 
-    # TODO: don't repeat-print if list too short
-    bars = ret['result'][pair]
-    for b in bars[:5]: print(b)
-    print('...')
-    for b in bars[-5:]: print(b)
+    fig, ax = plt.subplots()
+    candlestick2_ohlc(ax, opens, highs, lows, closes, width=1, colorup='g', colordown='r', alpha=1.0)
+    # plt.plot(vwap, color='k')
+    plt.plot(sar_hist, color='k', linestyle=":")
+    # plt.ion()
+    plt.show()
 
-    lineprint(after - before)
+    for block in ohlc_hist:
+        print(block)
 
     time.sleep(20)
