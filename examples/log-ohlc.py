@@ -2,21 +2,24 @@
 import numpy as np
 import pandas as pd
 
+import matplotlib.dates as da
 import matplotlib.pyplot as plt
-from matplotlib.finance import candlestick2_ohlc
+# from matplotlib.finance import candlestick2_ohlc
+import matplotlib.ticker as ticker
 
 import krakenex
 import decimal
 import time
+import datetime
 
 k = krakenex.API()
 
-def psar(barsdata, iaf = 0.02, maxaf = 0.2):
+def psar(barsdata, iaf = 0.02, maxaf = 0.08):
     length = len(barsdata)
-    dates = list(barsdata['Date'])
-    high = list(barsdata['High'])
-    low = list(barsdata['Low'])
-    close = list(barsdata['Close'])
+    dates = list(barsdata.index)
+    high = list(barsdata['high'])
+    low = list(barsdata['low'])
+    close = list(barsdata['close'])
     psar = close[0:len(close)]
     psarbull = [None] * length
     psarbear = [None] * length
@@ -72,7 +75,8 @@ def psar(barsdata, iaf = 0.02, maxaf = 0.2):
         else:
             psarbear[i] = psar[i]
 
-    return {"dates":dates, "high":high, "low":low, "close":close, "psar":psar, "psarbear":psarbear, "psarbull":psarbull}
+    # return {"dates":dates, "high":high, "low":low, "close":close, "psar":psar, "psarbear":psarbear, "psarbull":psarbull}
+    return {"psar":psar, "psarbear":psarbear, "psarbull":psarbull}
 
 
 def now():
@@ -87,26 +91,19 @@ def request_ohlc(pair, since):
     response = None
     while(response == None):
         try:
-            response = k.query_public('OHLC', req = {'pair': pair, 'since': since, 'interval': 15})
+            response = k.query_public('OHLC', req = {'pair': pair, 'since': since, 'interval' : 5})
         except:
             print("Request failed, retry...")
     return response
-
-def sar(ohlc_hist, sar_hist, i, acc_factor):
-    if(sar_hist[i-1] < float(ohlc_hist[i-1][2])):
-        return sar_hist[i-1] + acc_factor * (float(ohlc_hist[i][2]) - sar_hist[i-1])
-    else:
-        return sar_hist[i-1] + acc_factor * (float(ohlc_hist[i][3]) - sar_hist[i-1])
-
-
 
 pair = 'XETHZEUR'
 since = str(now() - 3600000)
 ohlc_data = None
 
-read_data = pd.read_csv("data.csv").set_index('time')
-ohlc_data = read_data
+# read_data = pd.read_csv("data.csv").set_index('time')
+# ohlc_data = read_data
 
+start = True
 while True:
     #request
     ohlc_req = request_ohlc(pair, since)
@@ -122,30 +119,43 @@ while True:
     #create DataFrame
     request_data = pd.DataFrame(ohlc_req['result'][pair], columns=['time','open', 'high', 'low', 'close', 'vwap', 'volume', 'count']).set_index('time')
 
+    if(not isinstance(ohlc_data, pd.DataFrame)):
+        ohlc_data = request_data
+    else:
+        append_ohlc(ohlc_data, request_data)
+
     # df.to_csv("data.csv")
 
-    # if(ohlc_data == None):
-    #     ohlc_data = request_data
-    # else:
-    ohlc_data = merge_ohlc(ohlc_data, request_data)
+    psar_data = psar(ohlc_data)
 
-    print(ohlc_data)
-    print(ohlc_data.loc[1499946300,"open"])
+    # mdate = list()
+    # for idx in ohlc_data.index:
+    #     mdate.append(da.epoch2num(idx))
+    #
+    # fig, ax = plt.subplots()
+    # candlestick2_ohlc(ax, ohlc_data['open'], ohlc_data['high'], ohlc_data['low'], ohlc_data['close'], width=0.6, colorup='g', colordown='r', alpha=1.0)
+    # plt.plot(range(0,len(ohlc_data)), psar_data['psarbull'], color='k', marker='.')
+    # plt.plot(range(0,len(ohlc_data)), psar_data['psarbear'], color='k', marker='.')
+    # xdate = [datetime.datetime.fromtimestamp(i) for i in ohlc_data.index]
+    #
+    # ax.xaxis.set_major_locator(ticker.MaxNLocator(6))
+    #
+    # def mydate(x, pos):
+    #     try:
+    #         return xdate[int(x)]
+    #     except IndexError:
+    #         return ''
+    #
+    # ax.xaxis.set_major_formatter(ticker.FuncFormatter(mydate))
+    #
+    # fig.autofmt_xdate()
+    # fig.tight_layout()
+    #
+    # plt.show()
 
-    exit(0)
-
-    sar_hist = [0.0]
-    for i in range(1, len(ohlc_hist)):
-        sar_hist.append(sar(ohlc_hist, sar_hist, i, 0.02))
-
-    fig, ax = plt.subplots()
-    candlestick2_ohlc(ax, opens, highs, lows, closes, width=1, colorup='g', colordown='r', alpha=1.0)
-    # plt.plot(vwap, color='k')
-    plt.plot(sar_hist, color='k', linestyle=":")
-    # plt.ion()
-    plt.show()
-
-    for block in ohlc_hist:
-        print(block)
+    if(psar_data['psarbear'][-1] != None):
+        print(datetime.datetime.fromtimestamp(ohlc_data.index[-1]).strftime('%Y-%m-%d %H:%M:%S'), "down")
+    else:
+        print(datetime.datetime.fromtimestamp(ohlc_data.index[-1]).strftime('%Y-%m-%d %H:%M:%S'), "up")
 
     time.sleep(20)
