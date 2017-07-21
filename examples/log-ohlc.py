@@ -1,44 +1,87 @@
 #!/usr/bin/env python3
+import numpy as np
+import pandas as pd
+
 import matplotlib.pyplot as plt
 from matplotlib.finance import candlestick2_ohlc
+
 import krakenex
 import decimal
 import time
 
 k = krakenex.API()
 
+def psar(barsdata, iaf = 0.02, maxaf = 0.2):
+    length = len(barsdata)
+    dates = list(barsdata['Date'])
+    high = list(barsdata['High'])
+    low = list(barsdata['Low'])
+    close = list(barsdata['Close'])
+    psar = close[0:len(close)]
+    psarbull = [None] * length
+    psarbear = [None] * length
+    bull = True
+    af = iaf
+    ep = low[0]
+    hp = high[0]
+    lp = low[0]
+
+    for i in range(2,length):
+        if bull:
+            psar[i] = psar[i - 1] + af * (hp - psar[i - 1])
+        else:
+            psar[i] = psar[i - 1] + af * (lp - psar[i - 1])
+
+        reverse = False
+
+        if bull:
+            if low[i] < psar[i]:
+                bull = False
+                reverse = True
+                psar[i] = hp
+                lp = low[i]
+                af = iaf
+        else:
+            if high[i] > psar[i]:
+                bull = True
+                reverse = True
+                psar[i] = lp
+                hp = high[i]
+                af = iaf
+
+        if not reverse:
+            if bull:
+                if high[i] > hp:
+                    hp = high[i]
+                    af = min(af + iaf, maxaf)
+                if low[i - 1] < psar[i]:
+                    psar[i] = low[i - 1]
+                if low[i - 2] < psar[i]:
+                    psar[i] = low[i - 2]
+            else:
+                if low[i] < lp:
+                    lp = low[i]
+                    af = min(af + iaf, maxaf)
+                if high[i - 1] > psar[i]:
+                    psar[i] = high[i - 1]
+                if high[i - 2] > psar[i]:
+                    psar[i] = high[i - 2]
+
+        if bull:
+            psarbull[i] = psar[i]
+        else:
+            psarbear[i] = psar[i]
+
+    return {"dates":dates, "high":high, "low":low, "close":close, "psar":psar, "psarbear":psarbear, "psarbull":psarbull}
+
+
 def now():
     return decimal.Decimal(time.time())
 
-def merge_hist(old_h, new_h):
-    if(not old_h):
-        old_h = new_h
-        return
-
-    old_it = len(old_h)-1
-    new_it = 0
-
-    while(old_h[old_it][0] > new_h[new_it][0]):
-        old_it -= 1
-
-    if(old_h[old_it][0] < new_h[new_it][0]):
-        old_it += 1
-
-    while(new_it < len(new_h)):
-        if(old_it < len(old_h)):
-            if(old_h[old_it][0] == new_h[new_it][0]):
-                #replace
-                old_h[old_it] = new_h[new_it]
-            elif(old_h[old_it][0] > new_h[new_it][0]):
-                #insert
-                old_h.insert(old_it, new_h[new_it])
-            else:
-                new_it -= 1
-        else:
-            # append new_it
-            old_h.append(new_h[new_it])
-        old_it += 1
-        new_it += 1
+def append_ohlc(prev_data, cur_data):
+    for idx in cur_data.index:
+        prev_data.loc[idx] = cur_data.loc[idx]
+    prev_data.sort_index(inplace=True)
 
 def request_ohlc(pair, since):
     response = None
@@ -55,24 +98,41 @@ def sar(ohlc_hist, sar_hist, i, acc_factor):
     else:
         return sar_hist[i-1] + acc_factor * (float(ohlc_hist[i][3]) - sar_hist[i-1])
 
+
+
 pair = 'XETHZEUR'
 since = str(now() - 3600000)
-ohlc_hist = list()
+ohlc_data = None
+
+read_data = pd.read_csv("data.csv").set_index('time')
+ohlc_data = read_data
+
 while True:
+    #request
     ohlc_req = request_ohlc(pair, since)
 
+    #set since for next request with overlay
     since = ohlc_req['result']['last'] - 60
 
-    if(not ohlc_hist):
-        ohlc_hist = ohlc_req['result'][pair]
-    else:
-        merge_hist(ohlc_hist, ohlc_req['result'][pair])
+    #convert string fields to float
+    for elt in ohlc_req['result'][pair]:
+        for i in range(1, 7):
+            elt[i] = float(elt[i])
 
-    opens =  [row[1] for row in ohlc_hist]
-    highs =  [row[2] for row in ohlc_hist]
-    lows =   [row[3] for row in ohlc_hist]
-    closes = [row[4] for row in ohlc_hist]
-    vwap =   [row[5] for row in ohlc_hist]
+    #create DataFrame
+    request_data = pd.DataFrame(ohlc_req['result'][pair], columns=['time','open', 'high', 'low', 'close', 'vwap', 'volume', 'count']).set_index('time')
+
+    # df.to_csv("data.csv")
+
+    # if(ohlc_data == None):
+    #     ohlc_data = request_data
+    # else:
+    ohlc_data = merge_ohlc(ohlc_data, request_data)
+
+    print(ohlc_data)
+    print(ohlc_data.loc[1499946300,"open"])
+
+    exit(0)
 
     sar_hist = [0.0]
     for i in range(1, len(ohlc_hist)):
